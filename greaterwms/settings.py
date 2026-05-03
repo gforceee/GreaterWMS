@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'throttle.apps.ThrottleConfig',
     'uploadfile.apps.UploadfileConfig',
     'scanner.apps.ScannerConfig',
+    'lightstrip.apps.LightstripConfig',
     'rest_framework',
     'django_filters',
     'corsheaders',

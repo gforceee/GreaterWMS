@@ -32,6 +32,7 @@ from django.utils import timezone
 from .files import FileListRenderCN, FileListRenderEN, FileDetailRenderCN, FileDetailRenderEN
 from rest_framework.settings import api_settings
 from staff.models import ListModel as staff
+from lightstrip.views import safe_dispatch_light_command
 
 class DnListViewSet(viewsets.ModelViewSet):
     """
@@ -1637,6 +1638,7 @@ class DnPickedViewSet(viewsets.ModelViewSet):
             qs.dn_status = 4
             staff_name = staff.objects.filter(openid=self.request.auth.openid,
                                               id=self.request.META.get('HTTP_OPERATOR')).first().staff_name
+            bins_to_check_for_light_off = set()
             for j in range(len(data['goodsData'])):
                 goods_qty_change = stocklist.objects.filter(openid=self.request.auth.openid,
                                                             goods_code=str(data['goodsData'][j].get('goods_code'))).first()
@@ -1650,6 +1652,7 @@ class DnPickedViewSet(viewsets.ModelViewSet):
                                                                   dn_code=str(data['dn_code']),
                                                                   picking_status=0,
                                                                   t_code=str(data['goodsData'][j].get('t_code'))).first()
+                bins_to_check_for_light_off.add(bin_qty_change.bin_name)
                 qtychangerecorder.objects.create(openid=self.request.auth.openid,
                                                  mode_code=dn_detail.dn_code,
                                                  bin_name=bin_qty_change.bin_name,
@@ -1701,6 +1704,23 @@ class DnPickedViewSet(viewsets.ModelViewSet):
                 if dn_detail.pick_qty > 0:
                     dn_detail.pick_qty = 0
                 dn_detail.save()
+            for bin_name in bins_to_check_for_light_off:
+                if not PickingListModel.objects.filter(
+                    openid=self.request.auth.openid,
+                    dn_code=str(data['dn_code']),
+                    picking_status=0,
+                    bin_name=bin_name
+                ).exists():
+                    safe_dispatch_light_command(
+                        openid=self.request.auth.openid,
+                        bin_name=bin_name,
+                        command='off',
+                        task_type='picking_off',
+                        source_type='dn',
+                        source_code=str(data['dn_code']),
+                        operator=str(staff_name),
+                        extra_payload={'lcd_num_val': 0, 'beep_mode': 0}
+                    )
             if DnDetailModel.objects.filter(openid=self.request.auth.openid, dn_code=str(data['dn_code']), dn_status=3).exists() is False:
                 qs.save()
             return Response({"Detail": "success"}, status=200)
@@ -1737,6 +1757,7 @@ class DnPickedViewSet(viewsets.ModelViewSet):
             qs.dn_status = 4
             staff_name = staff.objects.filter(openid=self.request.auth.openid,
                                               id=self.request.META.get('HTTP_OPERATOR')).first().staff_name
+            bins_to_check_for_light_off = set()
             for j in range(len(data['goodsData'])):
                 goods_qty_change = stocklist.objects.filter(openid=self.request.auth.openid,
                                                             goods_code=str(
@@ -1752,6 +1773,7 @@ class DnPickedViewSet(viewsets.ModelViewSet):
                                                                   picking_status=0,
                                                                   t_code=str(
                                                                       data['goodsData'][j].get('t_code'))).first()
+                bins_to_check_for_light_off.add(bin_qty_change.bin_name)
                 qtychangerecorder.objects.create(openid=self.request.auth.openid,
                                                  mode_code=dn_detail.dn_code,
                                                  bin_name=bin_qty_change.bin_name,
@@ -1812,6 +1834,23 @@ class DnPickedViewSet(viewsets.ModelViewSet):
                     qs.save()
                     dn_detail.dn_status = 4
                     dn_detail.save()
+            for bin_name in bins_to_check_for_light_off:
+                if not PickingListModel.objects.filter(
+                    openid=self.request.auth.openid,
+                    dn_code=str(data['dn_code']),
+                    picking_status=0,
+                    bin_name=bin_name
+                ).exists():
+                    safe_dispatch_light_command(
+                        openid=self.request.auth.openid,
+                        bin_name=bin_name,
+                        command='off',
+                        task_type='picking_off',
+                        source_type='dn',
+                        source_code=str(data['dn_code']),
+                        operator=str(staff_name),
+                        extra_payload={'lcd_num_val': 0, 'beep_mode': 0}
+                    )
             return Response({"Detail": "success"}, status=200)
 
 class DnDispatchViewSet(viewsets.ModelViewSet):
