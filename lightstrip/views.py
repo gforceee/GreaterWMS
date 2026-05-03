@@ -382,18 +382,12 @@ def dispatch_batch_light_command(openid, bin_names, command, task_type, source_t
             device__is_active=True
         ).select_related('device')
     )
+    task_logs = []
     if not bindings:
         for bin_name in unique_bin_names:
-            _create_failed_task_log(
-                openid=openid,
-                task_type=task_type,
-                source_type=source_type,
-                source_code=source_code,
-                bin_name=bin_name,
-                device_code='',
-                light_address='',
-                command=command,
-                request_payload=_build_request_payload(
+            task_logs.append(
+                _create_failed_task_log(
+                    openid=openid,
                     task_type=task_type,
                     source_type=source_type,
                     source_code=source_code,
@@ -401,30 +395,32 @@ def dispatch_batch_light_command(openid, bin_names, command, task_type, source_t
                     device_code='',
                     light_address='',
                     command=command,
-                    color='',
-                    extra_payload=extra_payload,
-                    device_config={},
-                    binding_config={},
-                ),
-                operator=operator,
-                message='No active light binding found for this bin'
+                    request_payload=_build_request_payload(
+                        task_type=task_type,
+                        source_type=source_type,
+                        source_code=source_code,
+                        bin_name=bin_name,
+                        device_code='',
+                        light_address='',
+                        command=command,
+                        color='',
+                        extra_payload=extra_payload,
+                        device_config={},
+                        binding_config={},
+                    ),
+                    operator=operator,
+                    message='No active light binding found for this bin'
+                )
             )
-        raise APIException({"detail": "No active light bindings found for the requested bins"})
+        return task_logs
 
     binding_map = {binding.bin_name: binding for binding in bindings}
     missing_bins = [bin_name for bin_name in unique_bin_names if bin_name not in binding_map]
     if missing_bins:
         for bin_name in missing_bins:
-            _create_failed_task_log(
-                openid=openid,
-                task_type=task_type,
-                source_type=source_type,
-                source_code=source_code,
-                bin_name=bin_name,
-                device_code='',
-                light_address='',
-                command=command,
-                request_payload=_build_request_payload(
+            task_logs.append(
+                _create_failed_task_log(
+                    openid=openid,
                     task_type=task_type,
                     source_type=source_type,
                     source_code=source_code,
@@ -432,15 +428,23 @@ def dispatch_batch_light_command(openid, bin_names, command, task_type, source_t
                     device_code='',
                     light_address='',
                     command=command,
-                    color='',
-                    extra_payload=extra_payload,
-                    device_config={},
-                    binding_config={},
-                ),
-                operator=operator,
-                message='No active light binding found for this bin'
+                    request_payload=_build_request_payload(
+                        task_type=task_type,
+                        source_type=source_type,
+                        source_code=source_code,
+                        bin_name=bin_name,
+                        device_code='',
+                        light_address='',
+                        command=command,
+                        color='',
+                        extra_payload=extra_payload,
+                        device_config={},
+                        binding_config={},
+                    ),
+                    operator=operator,
+                    message='No active light binding found for this bin'
+                )
             )
-        raise APIException({"detail": "Some bins are not bound to active lights", "bins": missing_bins})
 
     device_groups = {}
     for bin_name in unique_bin_names:
@@ -448,7 +452,6 @@ def dispatch_batch_light_command(openid, bin_names, command, task_type, source_t
         device_groups.setdefault(binding.device_id, {"device": binding.device, "bindings": []})
         device_groups[binding.device_id]["bindings"].append(binding)
 
-    task_logs = []
     for group in device_groups.values():
         provider_payload = []
         for binding in group["bindings"]:
