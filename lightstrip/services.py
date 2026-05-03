@@ -1,6 +1,7 @@
 import random
 import socket
 import string
+import time
 
 
 class LightStripProvider:
@@ -25,26 +26,29 @@ class LightStripProvider:
                 'transport': 'tcp_socket'
             }
 
-        host, port = self._parse_endpoint(endpoint)
-        command_items = [self._build_command_item(payload) for payload in payloads]
+        host = ''
+        port = None
         responses = []
         sock = None
         try:
+            host, port = self._parse_endpoint(endpoint)
+            command_items = [self._build_command_item(payload) for payload in payloads]
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(self._socket_timeout())
             sock.connect((host, port))
             for item in command_items:
                 wire_data = item['command'] + '\r\n'
                 sock.sendall(wire_data.encode('utf-8'))
-                item_responses = self._read_command_responses(
-                    sock=sock,
-                    trace=item['trace'],
-                    expect_async=item['expect_async']
-                )
+
+            response_map = self._read_batch_command_responses(sock, command_items)
+            for item in command_items:
+                item_responses = response_map.get(item['trace'], [])
                 responses.append({
                     'trace': item['trace'],
                     'command': item['command'],
-                    'responses': item_responses
+                    'payload': item['payload'],
+                    'responses': item_responses,
+                    'status': self._derive_item_status(item_responses)
                 })
             return {
                 'status': self._derive_status(responses),
@@ -85,6 +89,7 @@ class LightStripProvider:
         return {
             'trace': trace,
             'command': command,
+            'payload': payload,
             'expect_async': True
         }
 
@@ -146,11 +151,16 @@ class LightStripProvider:
             trace=trace
         )
 
-    def _read_command_responses(self, sock, trace, expect_async):
-        responses = []
+    def _read_batch_command_responses(self, sock, command_items):
+        traces = {item['trace'] for item in command_items}
+        responses = {trace: [] for trace in traces}
+        completed = set()
         buffered = ''
-        while True:
+        deadline = time.monotonic() + self._socket_timeout()
+        while traces - completed and time.monotonic() < deadline:
             try:
+                remaining = deadline - time.monotonic()
+                sock.settimeout(max(0.1, remaining))
                 chunk = sock.recv(10240)
             except socket.timeout:
                 break
@@ -163,28 +173,52 @@ class LightStripProvider:
                 line = raw_line.strip()
                 if not line:
                     continue
-                if 'TRACE={}'.format(trace) not in line:
+                trace = self._extract_response_trace(line)
+                if trace not in traces:
                     continue
-                responses.append(line)
-                if expect_async and 'RT=' in line:
-                    return responses
-                if not expect_async:
-                    return responses
+                responses[trace].append(line)
+                if self._is_terminal_response(line):
+                    completed.add(trace)
         return responses
 
     def _derive_status(self, command_results):
         if not command_results:
             return 'failed'
-        for item in command_results:
-            lines = item.get('responses') or []
-            if not lines:
-                return 'failed'
-            if any('RESULT=OK' in line for line in lines):
-                continue
-            if any('CMD=ACCEPT' in line for line in lines):
-                continue
+        statuses = [item.get('status') or self._derive_item_status(item.get('responses') or []) for item in command_results]
+        if any(status == 'failed' for status in statuses):
             return 'failed'
-        return 'success'
+        if all(status == 'success' for status in statuses):
+            return 'success'
+        if any(status == 'accepted' for status in statuses):
+            return 'accepted'
+        return 'failed'
+
+    def _derive_item_status(self, lines):
+        if not lines:
+            return 'failed'
+        normalized_lines = [line.upper() for line in lines]
+        result_lines = [line for line in normalized_lines if 'RESULT=' in line or 'RT=' in line]
+        if result_lines:
+            return 'success' if any('RESULT=OK' in line for line in result_lines) else 'failed'
+        if any('CMD=ACCEPT' in line for line in normalized_lines):
+            return 'accepted'
+        return 'failed'
+
+    def _is_terminal_response(self, line):
+        upper_line = line.upper()
+        return 'RT=' in upper_line or 'RESULT=' in upper_line
+
+    def _extract_response_trace(self, line):
+        upper_line = line.upper()
+        marker = 'TRACE='
+        index = upper_line.find(marker)
+        if index < 0:
+            return None
+        trace = line[index + len(marker):].strip()
+        for separator in [',', ' ', '\r', '\n']:
+            if separator in trace:
+                trace = trace.split(separator, 1)[0]
+        return trace.strip()
 
     def _parse_endpoint(self, endpoint):
         if ':' in endpoint:

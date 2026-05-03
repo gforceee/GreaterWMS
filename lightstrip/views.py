@@ -1,3 +1,4 @@
+from django.db import IntegrityError
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets
 from rest_framework.exceptions import APIException
@@ -124,21 +125,32 @@ class BindingAPIViewSet(viewsets.ModelViewSet):
             raise APIException({"detail": "This bin is already bound to a light"})
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        try:
+            serializer.save()
+        except IntegrityError:
+            raise APIException({"detail": "This bin is already bound to a light"})
         return Response(serializer.data, status=200)
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
+        self._validate_device_access(request.data)
         serializer = self.get_serializer(instance, data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        try:
+            serializer.save()
+        except IntegrityError:
+            raise APIException({"detail": "This bin is already bound to a light"})
         return Response(serializer.data, status=200)
 
     def partial_update(self, request, *args, **kwargs):
         instance = self.get_object()
+        self._validate_device_access(request.data)
         serializer = self.get_serializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        try:
+            serializer.save()
+        except IntegrityError:
+            raise APIException({"detail": "This bin is already bound to a light"})
         return Response(serializer.data, status=200)
 
     def destroy(self, request, *args, **kwargs):
@@ -147,6 +159,17 @@ class BindingAPIViewSet(viewsets.ModelViewSet):
         instance.save(update_fields=['is_delete', 'update_time'])
         serializer = self.get_serializer(instance)
         return Response(serializer.data, status=200)
+
+    def _validate_device_access(self, data):
+        device_id = data.get('device')
+        if device_id is None:
+            return
+        if not LightStripDeviceModel.objects.filter(
+            openid=self.request.auth.openid,
+            id=device_id,
+            is_delete=False
+        ).exists():
+            raise APIException({"detail": "Device does not exist"})
 
 
 class TaskLogAPIViewSet(viewsets.ReadOnlyModelViewSet):
@@ -248,6 +271,19 @@ class PTLSkuAPIViewSet(viewsets.ViewSet):
 
 
 def dispatch_light_command(openid, bin_name, command, task_type, source_type, source_code, operator, extra_payload):
+    request_payload = _build_request_payload(
+        task_type=task_type,
+        source_type=source_type,
+        source_code=source_code,
+        bin_name=bin_name,
+        device_code='',
+        light_address='',
+        command=command,
+        color='',
+        extra_payload=extra_payload,
+        device_config={},
+        binding_config={},
+    )
     binding = BinLightBindingModel.objects.filter(
         openid=openid,
         bin_name=bin_name,
@@ -257,23 +293,39 @@ def dispatch_light_command(openid, bin_name, command, task_type, source_type, so
         device__is_active=True
     ).select_related('device').first()
     if binding is None:
+        _create_failed_task_log(
+            openid=openid,
+            task_type=task_type,
+            source_type=source_type,
+            source_code=source_code,
+            bin_name=bin_name,
+            device_code='',
+            light_address='',
+            command=command,
+            request_payload=request_payload,
+            operator=operator,
+            message='No active light binding found for this bin'
+        )
         raise APIException({"detail": "No active light binding found for this bin"})
 
-    payload = {
-        "task_type": task_type,
-        "source_type": source_type,
-        "source_code": source_code,
-        "bin_name": binding.bin_name,
-        "device_code": binding.device.device_code,
-        "light_address": binding.light_address,
-        "command": command,
-        "color": binding.color,
-        "extra_payload": extra_payload or {},
-        "device_config": binding.device.extra_config,
-        "binding_config": binding.extra_config,
-    }
+    payload = _build_request_payload(
+        task_type=task_type,
+        source_type=source_type,
+        source_code=source_code,
+        bin_name=binding.bin_name,
+        device_code=binding.device.device_code,
+        light_address=binding.light_address,
+        command=command,
+        color=binding.color,
+        extra_payload=extra_payload,
+        device_config=binding.device.extra_config,
+        binding_config=binding.extra_config,
+    )
     provider = LightStripProvider(binding.device)
-    provider_response = provider.dispatch(payload)
+    try:
+        provider_response = provider.dispatch(payload)
+    except Exception as exc:
+        provider_response = _build_failed_provider_response(payload, exc)
     task_log = LightStripTaskLogModel.objects.create(
         openid=openid,
         task_type=task_type,
@@ -331,11 +383,63 @@ def dispatch_batch_light_command(openid, bin_names, command, task_type, source_t
         ).select_related('device')
     )
     if not bindings:
+        for bin_name in unique_bin_names:
+            _create_failed_task_log(
+                openid=openid,
+                task_type=task_type,
+                source_type=source_type,
+                source_code=source_code,
+                bin_name=bin_name,
+                device_code='',
+                light_address='',
+                command=command,
+                request_payload=_build_request_payload(
+                    task_type=task_type,
+                    source_type=source_type,
+                    source_code=source_code,
+                    bin_name=bin_name,
+                    device_code='',
+                    light_address='',
+                    command=command,
+                    color='',
+                    extra_payload=extra_payload,
+                    device_config={},
+                    binding_config={},
+                ),
+                operator=operator,
+                message='No active light binding found for this bin'
+            )
         raise APIException({"detail": "No active light bindings found for the requested bins"})
 
     binding_map = {binding.bin_name: binding for binding in bindings}
     missing_bins = [bin_name for bin_name in unique_bin_names if bin_name not in binding_map]
     if missing_bins:
+        for bin_name in missing_bins:
+            _create_failed_task_log(
+                openid=openid,
+                task_type=task_type,
+                source_type=source_type,
+                source_code=source_code,
+                bin_name=bin_name,
+                device_code='',
+                light_address='',
+                command=command,
+                request_payload=_build_request_payload(
+                    task_type=task_type,
+                    source_type=source_type,
+                    source_code=source_code,
+                    bin_name=bin_name,
+                    device_code='',
+                    light_address='',
+                    command=command,
+                    color='',
+                    extra_payload=extra_payload,
+                    device_config={},
+                    binding_config={},
+                ),
+                operator=operator,
+                message='No active light binding found for this bin'
+            )
         raise APIException({"detail": "Some bins are not bound to active lights", "bins": missing_bins})
 
     device_groups = {}
@@ -348,23 +452,42 @@ def dispatch_batch_light_command(openid, bin_names, command, task_type, source_t
     for group in device_groups.values():
         provider_payload = []
         for binding in group["bindings"]:
-            provider_payload.append({
-                "task_type": task_type,
-                "source_type": source_type,
-                "source_code": source_code,
-                "bin_name": binding.bin_name,
-                "device_code": binding.device.device_code,
-                "light_address": binding.light_address,
-                "command": command,
-                "color": binding.color,
-                "extra_payload": extra_payload or {},
-                "device_config": binding.device.extra_config,
-                "binding_config": binding.extra_config,
-            })
+            provider_payload.append(
+                _build_request_payload(
+                    task_type=task_type,
+                    source_type=source_type,
+                    source_code=source_code,
+                    bin_name=binding.bin_name,
+                    device_code=binding.device.device_code,
+                    light_address=binding.light_address,
+                    command=command,
+                    color=binding.color,
+                    extra_payload=extra_payload,
+                    device_config=binding.device.extra_config,
+                    binding_config=binding.extra_config,
+                )
+            )
 
         provider = LightStripProvider(group["device"])
-        provider_response = provider.dispatch_batch(provider_payload)
+        try:
+            provider_response = provider.dispatch_batch(provider_payload)
+        except Exception as exc:
+            provider_response = _build_failed_provider_response(provider_payload, exc)
         for binding in group["bindings"]:
+            request_payload = _build_request_payload(
+                task_type=task_type,
+                source_type=source_type,
+                source_code=source_code,
+                bin_name=binding.bin_name,
+                device_code=binding.device.device_code,
+                light_address=binding.light_address,
+                command=command,
+                color=binding.color,
+                extra_payload=extra_payload,
+                device_config=binding.device.extra_config,
+                binding_config=binding.extra_config,
+            )
+            item_response = _extract_binding_response(provider_response, binding)
             task_logs.append(
                 LightStripTaskLogModel.objects.create(
                     openid=openid,
@@ -375,23 +498,73 @@ def dispatch_batch_light_command(openid, bin_names, command, task_type, source_t
                     device_code=binding.device.device_code,
                     light_address=binding.light_address,
                     command=command,
-                    command_status=provider_response.get('status', 'pending'),
-                    request_payload={
-                        "task_type": task_type,
-                        "source_type": source_type,
-                        "source_code": source_code,
-                        "bin_name": binding.bin_name,
-                        "device_code": binding.device.device_code,
-                        "light_address": binding.light_address,
-                        "command": command,
-                        "color": binding.color,
-                        "extra_payload": extra_payload or {},
-                        "device_config": binding.device.extra_config,
-                        "binding_config": binding.extra_config,
-                    },
-                    response_payload=provider_response,
+                    command_status=item_response.get('status', provider_response.get('status', 'pending')),
+                    request_payload=request_payload,
+                    response_payload=item_response,
                     operator=operator,
-                    error_message='' if provider_response.get('status') != 'failed' else provider_response.get('message', '')
+                    error_message='' if item_response.get('status') != 'failed' else item_response.get('message', provider_response.get('message', ''))
                 )
             )
     return task_logs
+
+
+def _build_request_payload(task_type, source_type, source_code, bin_name, device_code, light_address, command, color, extra_payload, device_config, binding_config):
+    return {
+        "task_type": task_type,
+        "source_type": source_type,
+        "source_code": source_code,
+        "bin_name": bin_name,
+        "device_code": device_code,
+        "light_address": light_address,
+        "command": str(command or 'on').lower(),
+        "color": color,
+        "extra_payload": extra_payload or {},
+        "device_config": device_config or {},
+        "binding_config": binding_config or {},
+    }
+
+
+def _build_failed_provider_response(payload, exc):
+    return {
+        'status': 'failed',
+        'message': str(exc),
+        'transport': 'tcp_socket',
+        'payload': payload,
+        'command_results': []
+    }
+
+
+def _create_failed_task_log(openid, task_type, source_type, source_code, bin_name, device_code, light_address, command, request_payload, operator, message):
+    return LightStripTaskLogModel.objects.create(
+        openid=openid,
+        task_type=task_type,
+        source_type=source_type,
+        source_code=source_code,
+        bin_name=bin_name,
+        device_code=device_code,
+        light_address=light_address,
+        command=str(command or 'on').lower(),
+        command_status='failed',
+        request_payload=request_payload,
+        response_payload={
+            'status': 'failed',
+            'message': message
+        },
+        operator=operator,
+        error_message=message
+    )
+
+
+def _extract_binding_response(provider_response, binding):
+    for item in provider_response.get('command_results') or []:
+        payload = item.get('payload') or {}
+        if payload.get('bin_name') == binding.bin_name and payload.get('light_address') == binding.light_address:
+            return {
+                'status': item.get('status', provider_response.get('status', 'pending')),
+                'message': provider_response.get('message', ''),
+                'transport': provider_response.get('transport', ''),
+                'host': provider_response.get('host', ''),
+                'port': provider_response.get('port', ''),
+                'command_result': item,
+            }
+    return provider_response

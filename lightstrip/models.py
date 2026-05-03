@@ -46,6 +46,13 @@ class BinLightBindingModel(models.Model):
         verbose_name = 'Bin Light Binding'
         verbose_name_plural = "Bin Light Binding"
         ordering = ['-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['openid', 'bin_name'],
+                condition=models.Q(is_delete=False),
+                name='uniq_active_lightstrip_bin'
+            )
+        ]
 
 
 class LightStripTaskLogModel(models.Model):
