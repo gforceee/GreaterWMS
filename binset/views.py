@@ -7,6 +7,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.response import Response
 from .filter import Filter
 from rest_framework.exceptions import APIException
+from django.db import transaction
 from django.db.models import Q
 from binsize.models import ListModel as binsize
 from scanner.models import ListModel as scanner
@@ -17,6 +18,7 @@ from .files import FileRenderCN, FileRenderEN
 from rest_framework.settings import api_settings
 from utils.md5 import Md5
 from .serializers import ScannerBinsetTagGetSerializer
+from lightstrip.models import BinLightBindingModel, LightStripDeviceModel
 
 class ScannerBinsetTagView(viewsets.ModelViewSet):
     """
@@ -111,7 +113,8 @@ class APIViewSet(viewsets.ModelViewSet):
             return self.http_method_not_allowed(request=self.request)
 
     def create(self, request, *args, **kwargs):
-        data = self.request.data
+        data = self.request.data.copy()
+        lightstrip_data = pop_lightstrip_binding_data(data)
         data['openid'] = self.request.auth.openid
         if ListModel.objects.filter(openid=data['openid'], bin_name=data['bin_name'], is_delete=False).exists():
             raise APIException({"detail": "Data exists"})
@@ -122,9 +125,15 @@ class APIViewSet(viewsets.ModelViewSet):
                     data['bar_code'] = Md5.md5(data['bin_name'])
                     serializer = self.get_serializer(data=data)
                     serializer.is_valid(raise_exception=True)
-                    serializer.save()
-                    scanner.objects.create(openid=self.request.auth.openid, mode="BINSET", code=data['bin_name'],
-                                           bar_code=data['bar_code'])
+                    with transaction.atomic():
+                        serializer.save()
+                        sync_bin_light_binding(
+                            openid=self.request.auth.openid,
+                            bin_name=data['bin_name'],
+                            binding_data=lightstrip_data
+                        )
+                        scanner.objects.create(openid=self.request.auth.openid, mode="BINSET", code=data['bin_name'],
+                                               bar_code=data['bar_code'])
                     headers = self.get_success_headers(serializer.data)
                     return Response(serializer.data, status=200, headers=headers)
                 else:
@@ -137,13 +146,20 @@ class APIViewSet(viewsets.ModelViewSet):
         if qs.openid != self.request.auth.openid:
             raise APIException({"detail": "Cannot update data which not yours"})
         else:
-            data = self.request.data
+            data = self.request.data.copy()
+            lightstrip_data = pop_lightstrip_binding_data(data)
             if binsize.objects.filter(openid=self.request.auth.openid, bin_size=data['bin_size'], is_delete=False).exists():
                 if binproperty.objects.filter(Q(openid=self.request.auth.openid, bin_property=data['bin_property'], is_delete=False) |
                                               Q(openid='init_data', bin_property=data['bin_property'], is_delete=False)).exists():
                     serializer = self.get_serializer(qs, data=data)
                     serializer.is_valid(raise_exception=True)
-                    serializer.save()
+                    with transaction.atomic():
+                        serializer.save()
+                        sync_bin_light_binding(
+                            openid=self.request.auth.openid,
+                            bin_name=qs.bin_name,
+                            binding_data=lightstrip_data
+                        )
                     headers = self.get_success_headers(serializer.data)
                     return Response(serializer.data, status=200, headers=headers)
                 else:
@@ -156,13 +172,20 @@ class APIViewSet(viewsets.ModelViewSet):
         if qs.openid != self.request.auth.openid:
             raise APIException({"detail": "Cannot partial_update data which not yours"})
         else:
-            data = self.request.data
+            data = self.request.data.copy()
+            lightstrip_data = pop_lightstrip_binding_data(data)
             if binsize.objects.filter(openid=self.request.auth.openid, bin_size=data['bin_size'], is_delete=False).exists():
                 if binproperty.objects.filter(Q(openid=self.request.auth.openid, bin_property=data['bin_property'], is_delete=False) |
                                               Q(openid='init_data', bin_property=data['bin_property'], is_delete=False)).exists():
                     serializer = self.get_serializer(qs, data=data, partial=True)
                     serializer.is_valid(raise_exception=True)
-                    serializer.save()
+                    with transaction.atomic():
+                        serializer.save()
+                        sync_bin_light_binding(
+                            openid=self.request.auth.openid,
+                            bin_name=serializer.instance.bin_name,
+                            binding_data=lightstrip_data
+                        )
                     headers = self.get_success_headers(serializer.data)
                     return Response(serializer.data, status=200, headers=headers)
                 else:
@@ -180,6 +203,83 @@ class APIViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(qs, many=False)
             headers = self.get_success_headers(serializer.data)
             return Response(serializer.data, status=200, headers=headers)
+
+
+LIGHTSTRIP_BINDING_FIELDS = [
+    'lightstrip_device',
+    'light_address',
+    'light_color',
+    'lightstrip_extra_config',
+]
+
+
+def pop_lightstrip_binding_data(data):
+    binding_data = {}
+    for field in LIGHTSTRIP_BINDING_FIELDS:
+        if field in data:
+            binding_data[field] = data.get(field)
+            data.pop(field, None)
+    return binding_data
+
+
+def sync_bin_light_binding(openid, bin_name, binding_data):
+    if not binding_data:
+        return None
+
+    binding = BinLightBindingModel.objects.filter(
+        openid=openid,
+        bin_name=bin_name,
+        is_delete=False
+    ).select_related('device').first()
+
+    light_address = binding_data.get('light_address')
+    lightstrip_device = binding_data.get('lightstrip_device')
+    light_color = binding_data.get('light_color') or 'green'
+    extra_config = binding_data.get('lightstrip_extra_config')
+
+    if light_address is not None and str(light_address).strip() == '':
+        if binding:
+            binding.is_delete = True
+            binding.save(update_fields=['is_delete', 'update_time'])
+        return None
+
+    if light_address is None and lightstrip_device is None and light_color is None and extra_config is None:
+        return binding
+
+    if binding is None and not lightstrip_device:
+        raise APIException({"detail": "Lightstrip device is required when binding a light"})
+
+    if lightstrip_device:
+        device = LightStripDeviceModel.objects.filter(
+            openid=openid,
+            id=lightstrip_device,
+            is_delete=False
+        ).first()
+        if device is None:
+            raise APIException({"detail": "Lightstrip device does not exist"})
+    else:
+        device = binding.device
+
+    if binding is None:
+        return BinLightBindingModel.objects.create(
+            openid=openid,
+            bin_name=bin_name,
+            device=device,
+            light_address=str(light_address).strip(),
+            color=str(light_color or 'green'),
+            extra_config=extra_config or {},
+        )
+
+    binding.device = device
+    if light_address is not None:
+        binding.light_address = str(light_address).strip()
+    if light_color is not None:
+        binding.color = str(light_color or 'green')
+    if extra_config is not None:
+        binding.extra_config = extra_config or {}
+    binding.is_active = True
+    binding.save()
+    return binding
 
 class FileDownloadView(viewsets.ModelViewSet):
     renderer_classes = (FileRenderCN, ) + tuple(api_settings.DEFAULT_RENDERER_CLASSES)
