@@ -661,6 +661,9 @@ export default {
         }
         postauth(_this.pathname, _this.newFormData)
           .then(res => {
+            if (_this.hasResponseError(res)) {
+              return
+            }
             _this.getList()
             _this.newDataCancel()
             _this.$q.notify({
@@ -847,6 +850,9 @@ export default {
       }
       return []
     },
+    hasResponseError (res) {
+      return res && res.status_code && res.status_code !== 200
+    },
     openLightstripTagForm () {
       this.lightstripTagForm = true
       this.getLightstripDevices()
@@ -895,6 +901,9 @@ export default {
       }
       postauth('lightstrip/device/', _this.lightstripDeviceData)
         .then(res => {
+          if (_this.hasResponseError(res)) {
+            return
+          }
           _this.lightstripDeviceData = {
             device_code: '',
             device_name: '',
@@ -933,6 +942,9 @@ export default {
       }
       postauth('lightstrip/tag/', _this.lightstripTagData)
         .then(res => {
+          if (_this.hasResponseError(res)) {
+            return
+          }
           _this.lightstripTagData = {
             device: '',
             light_sn: '',
