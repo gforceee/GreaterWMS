@@ -32,6 +32,25 @@ from django.utils import timezone
 from .files import FileListRenderCN, FileListRenderEN, FileDetailRenderCN, FileDetailRenderEN
 from rest_framework.settings import api_settings
 from staff.models import ListModel as staff
+from lightstrip.views import dispatch_batch_light_command
+
+
+def trigger_outbound_picking_lights(openid, picking_list, operator):
+    if not picking_list:
+        return
+    try:
+        dispatch_batch_light_command(
+            openid=openid,
+            bin_names=[item.bin_name for item in picking_list],
+            command='on',
+            task_type='picking',
+            source_type='dn',
+            source_code=picking_list[0].dn_code,
+            operator=operator,
+            extra_payload={}
+        )
+    except Exception:
+        pass
 
 class DnListViewSet(viewsets.ModelViewSet):
     """
@@ -1034,6 +1053,7 @@ class DnOrderReleaseViewSet(viewsets.ModelViewSet):
                     scanner.objects.create(openid=self.request.auth.openid, mode="DN", code=back_order_dn_code,
                                            bar_code=bar_code)
                     PickingListModel.objects.bulk_create(picking_list, batch_size=100)
+                    trigger_outbound_picking_lights(self.request.auth.openid, picking_list, str(staff_name))
                     DnDetailModel.objects.bulk_create(back_order_list, batch_size=100)
                     qs[v].total_weight = total_weight
                     qs[v].total_volume = total_volume
@@ -1043,6 +1063,7 @@ class DnOrderReleaseViewSet(viewsets.ModelViewSet):
                     qs[v].save()
                 elif back_order_list_label == 0:
                     PickingListModel.objects.bulk_create(picking_list, batch_size=100)
+                    trigger_outbound_picking_lights(self.request.auth.openid, picking_list, str(staff_name))
                     qs[v].dn_status = 3
                     qs[v].save()
             elif picking_list_label == 0:
@@ -1480,6 +1501,7 @@ class DnOrderReleaseViewSet(viewsets.ModelViewSet):
                         scanner.objects.create(openid=self.request.auth.openid, mode="DN", code=back_order_dn_code,
                                                bar_code=bar_code)
                         PickingListModel.objects.bulk_create(picking_list, batch_size=100)
+                        trigger_outbound_picking_lights(self.request.auth.openid, picking_list, str(staff_name))
                         DnDetailModel.objects.bulk_create(back_order_list, batch_size=100)
                         qs.total_weight = total_weight
                         qs.total_volume = total_volume
@@ -1489,6 +1511,7 @@ class DnOrderReleaseViewSet(viewsets.ModelViewSet):
                         qs.save()
                     elif back_order_list_label == 0:
                         PickingListModel.objects.bulk_create(picking_list, batch_size=100)
+                        trigger_outbound_picking_lights(self.request.auth.openid, picking_list, str(staff_name))
                         qs.dn_status = 3
                         qs.save()
                 elif picking_list_label == 0:

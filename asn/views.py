@@ -30,6 +30,7 @@ from .files import FileListRenderCN, FileListRenderEN, FileDetailRenderCN, FileD
 from rest_framework.settings import api_settings
 from dateutil.relativedelta import relativedelta
 from staff.models import ListModel as staff
+from lightstrip.views import safe_dispatch_light_command
 
 class AsnListViewSet(viewsets.ModelViewSet):
     """
@@ -971,6 +972,13 @@ class MoveToBinViewSet(viewsets.ModelViewSet):
                                 bin_detail.save()
                         elif move_qty < 0:
                             raise APIException({"detail": "Move Qty must < Actual Arrive Qty"})
+                        trigger_inbound_light(
+                            openid=self.request.auth.openid,
+                            bin_name=str(data['bin_name']),
+                            asn_code=str(data['asn_code']),
+                            operator=str(staff_name),
+                            qty=int(data['qty'])
+                        )
                         return Response({"detail": "success"}, status=200)
 
     def update(self, request, *args, **kwargs):
@@ -1129,7 +1137,32 @@ class MoveToBinViewSet(viewsets.ModelViewSet):
                             if bin_detail.empty_label == True:
                                 bin_detail.empty_label = False
                                 bin_detail.save()
+                inbound_qty = sum([int(item['qty']) for item in data['res_data'] if int(item['qty']) > 0])
+                if inbound_qty > 0:
+                    trigger_inbound_light(
+                        openid=self.request.auth.openid,
+                        bin_name=str(data['bin_name']),
+                        asn_code=str(data['asn_code']),
+                        operator=str(staff_name),
+                        qty=inbound_qty
+                    )
                 return Response({"detail": "success"}, status=200)
+
+
+def trigger_inbound_light(openid, bin_name, asn_code, operator, qty):
+    safe_dispatch_light_command(
+        openid=openid,
+        bin_name=bin_name,
+        command='on',
+        task_type='inbound_putaway',
+        source_type='asn',
+        source_code=asn_code,
+        operator=operator,
+        extra_payload={
+            'lcd_num_val': qty,
+            'beep_mode': 0
+        }
+    )
 
 class FileListDownloadView(viewsets.ModelViewSet):
     renderer_classes = (FileListRenderCN, ) + tuple(api_settings.DEFAULT_RENDERER_CLASSES)
