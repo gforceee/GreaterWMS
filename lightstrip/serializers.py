@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from utils import datasolve
 
-from .models import BinLightBindingModel, LightStripDeviceModel, LightStripTaskLogModel
+from .models import BinLightBindingModel, LightStripDeviceModel, LightStripTagModel, LightStripTaskLogModel
 
 
 class LightStripDeviceGetSerializer(serializers.ModelSerializer):
@@ -118,6 +118,7 @@ class BinLightBindingPostSerializer(serializers.ModelSerializer):
     openid = serializers.CharField(read_only=False, required=False, validators=[datasolve.openid_validate])
     bin_name = serializers.CharField(read_only=False, required=True, validators=[datasolve.data_validate])
     device = serializers.PrimaryKeyRelatedField(queryset=LightStripDeviceModel.objects.all(), required=True)
+    light_sn = serializers.CharField(read_only=False, required=False, allow_blank=True, validators=[datasolve.data_validate])
     light_address = serializers.CharField(read_only=False, required=True, validators=[datasolve.data_validate])
     color = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
     default_command = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
@@ -129,6 +130,7 @@ class BinLightBindingPostSerializer(serializers.ModelSerializer):
             'id',
             'bin_name',
             'device',
+            'light_sn',
             'light_address',
             'color',
             'default_command',
@@ -144,6 +146,7 @@ class BinLightBindingPostSerializer(serializers.ModelSerializer):
 class BinLightBindingUpdateSerializer(serializers.ModelSerializer):
     bin_name = serializers.CharField(read_only=True, required=False)
     device = serializers.PrimaryKeyRelatedField(queryset=LightStripDeviceModel.objects.all(), required=False)
+    light_sn = serializers.CharField(read_only=False, required=False, allow_blank=True, validators=[datasolve.data_validate])
     light_address = serializers.CharField(read_only=False, required=True, validators=[datasolve.data_validate])
     color = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
     default_command = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
@@ -155,6 +158,7 @@ class BinLightBindingUpdateSerializer(serializers.ModelSerializer):
             'id',
             'bin_name',
             'device',
+            'light_sn',
             'light_address',
             'color',
             'default_command',
@@ -168,6 +172,7 @@ class BinLightBindingUpdateSerializer(serializers.ModelSerializer):
 
 class BinLightBindingPartialUpdateSerializer(serializers.ModelSerializer):
     device = serializers.PrimaryKeyRelatedField(queryset=LightStripDeviceModel.objects.all(), required=False)
+    light_sn = serializers.CharField(read_only=False, required=False, allow_blank=True, validators=[datasolve.data_validate])
     light_address = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
     color = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
     default_command = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
@@ -178,6 +183,7 @@ class BinLightBindingPartialUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'device',
+            'light_sn',
             'light_address',
             'color',
             'default_command',
@@ -197,6 +203,81 @@ class LightStripTaskLogGetSerializer(serializers.ModelSerializer):
         model = LightStripTaskLogModel
         exclude = ['openid']
         read_only_fields = ['id']
+
+
+class LightStripTagGetSerializer(serializers.ModelSerializer):
+    device_code = serializers.CharField(source='device.device_code', read_only=True)
+    device_name = serializers.CharField(source='device.device_name', read_only=True)
+    create_time = serializers.DateTimeField(read_only=True, format='%Y-%m-%d %H:%M:%S')
+    update_time = serializers.DateTimeField(read_only=True, format='%Y-%m-%d %H:%M:%S')
+
+    class Meta:
+        model = LightStripTagModel
+        exclude = ['openid', 'is_delete']
+        read_only_fields = ['id']
+
+
+class LightStripTagPostSerializer(serializers.ModelSerializer):
+    openid = serializers.CharField(read_only=False, required=False, validators=[datasolve.openid_validate])
+    device = serializers.PrimaryKeyRelatedField(queryset=LightStripDeviceModel.objects.all(), required=True)
+    light_sn = serializers.CharField(read_only=False, required=True, validators=[datasolve.data_validate])
+    light_address = serializers.CharField(read_only=False, required=True, validators=[datasolve.data_validate])
+    extra_config = serializers.JSONField(required=False)
+
+    class Meta:
+        model = LightStripTagModel
+        fields = [
+            'id',
+            'device',
+            'light_sn',
+            'light_address',
+            'is_active',
+            'extra_config',
+            'openid',
+            'create_time',
+            'update_time',
+        ]
+        read_only_fields = ['id', 'create_time', 'update_time']
+
+
+class LightStripTagUpdateSerializer(serializers.ModelSerializer):
+    device = serializers.PrimaryKeyRelatedField(queryset=LightStripDeviceModel.objects.all(), required=False)
+    light_sn = serializers.CharField(read_only=True, required=False)
+    light_address = serializers.CharField(read_only=False, required=True, validators=[datasolve.data_validate])
+    extra_config = serializers.JSONField(required=False)
+
+    class Meta:
+        model = LightStripTagModel
+        fields = [
+            'id',
+            'device',
+            'light_sn',
+            'light_address',
+            'is_active',
+            'extra_config',
+            'create_time',
+            'update_time',
+        ]
+        read_only_fields = ['id', 'create_time', 'update_time']
+
+
+class LightStripTagPartialUpdateSerializer(serializers.ModelSerializer):
+    device = serializers.PrimaryKeyRelatedField(queryset=LightStripDeviceModel.objects.all(), required=False)
+    light_address = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
+    extra_config = serializers.JSONField(required=False)
+
+    class Meta:
+        model = LightStripTagModel
+        fields = [
+            'id',
+            'device',
+            'light_address',
+            'is_active',
+            'extra_config',
+            'create_time',
+            'update_time',
+        ]
+        read_only_fields = ['id', 'create_time', 'update_time']
 
 
 class LightStripTriggerSerializer(serializers.Serializer):

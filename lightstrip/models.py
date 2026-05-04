@@ -23,6 +23,41 @@ class LightStripDeviceModel(models.Model):
         ordering = ['-id']
 
 
+class LightStripTagModel(models.Model):
+    device = models.ForeignKey(
+        LightStripDeviceModel,
+        on_delete=models.CASCADE,
+        related_name='tags',
+        verbose_name="Device"
+    )
+    light_sn = models.CharField(max_length=255, verbose_name="Light SN")
+    light_address = models.CharField(max_length=255, verbose_name="Light Address")
+    is_active = models.BooleanField(default=True, verbose_name="Active")
+    extra_config = models.JSONField(default=dict, verbose_name="Extra Config")
+    openid = models.CharField(max_length=255, verbose_name="Openid")
+    is_delete = models.BooleanField(default=False, verbose_name='Delete Label')
+    create_time = models.DateTimeField(auto_now_add=True, verbose_name="Create Time")
+    update_time = models.DateTimeField(auto_now=True, blank=True, null=True, verbose_name="Update Time")
+
+    class Meta:
+        db_table = 'lightstrip_tag'
+        verbose_name = 'Light Strip Tag'
+        verbose_name_plural = "Light Strip Tag"
+        ordering = ['-id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['openid', 'light_sn'],
+                condition=models.Q(is_delete=False),
+                name='uniq_active_lightstrip_tag_sn'
+            ),
+            models.UniqueConstraint(
+                fields=['openid', 'device', 'light_address'],
+                condition=models.Q(is_delete=False),
+                name='uniq_active_lightstrip_tag_address'
+            )
+        ]
+
+
 class BinLightBindingModel(models.Model):
     bin_name = models.CharField(max_length=255, verbose_name="Bin Name")
     device = models.ForeignKey(
@@ -31,6 +66,7 @@ class BinLightBindingModel(models.Model):
         related_name='bindings',
         verbose_name="Device"
     )
+    light_sn = models.CharField(max_length=255, blank=True, default='', verbose_name="Light SN")
     light_address = models.CharField(max_length=255, verbose_name="Light Address")
     color = models.CharField(max_length=32, default='green', verbose_name="Color")
     default_command = models.CharField(max_length=32, default='on', verbose_name="Default Command")
@@ -51,6 +87,16 @@ class BinLightBindingModel(models.Model):
                 fields=['openid', 'bin_name'],
                 condition=models.Q(is_delete=False),
                 name='uniq_active_lightstrip_bin'
+            ),
+            models.UniqueConstraint(
+                fields=['openid', 'light_sn'],
+                condition=models.Q(is_delete=False) & ~models.Q(light_sn=''),
+                name='uniq_active_lightstrip_binding_sn'
+            ),
+            models.UniqueConstraint(
+                fields=['openid', 'device', 'light_address'],
+                condition=models.Q(is_delete=False),
+                name='uniq_active_lightstrip_binding_address'
             )
         ]
 

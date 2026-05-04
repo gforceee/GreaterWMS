@@ -59,6 +59,12 @@ class BinsetPostSerializer(serializers.ModelSerializer):
     bin_property = serializers.CharField(read_only=False, required=True, validators=[datasolve.data_validate])
     bar_code = serializers.CharField(read_only=False, required=True)
     creater = serializers.CharField(read_only=False, required=True, validators=[datasolve.data_validate])
+    light_sn = serializers.CharField(write_only=True, required=False, allow_blank=True, validators=[datasolve.data_validate])
+
+    def create(self, validated_data):
+        validated_data.pop('light_sn', None)
+        return super().create(validated_data)
+
     class Meta:
         model = ListModel
         exclude = ['is_delete', ]
@@ -70,6 +76,12 @@ class BinsetUpdateSerializer(serializers.ModelSerializer):
     bin_property = serializers.CharField(read_only=True, required=False)
     creater = serializers.CharField(read_only=False, required=True, validators=[datasolve.data_validate])
     bar_code = serializers.CharField(read_only=False, required=False)
+    light_sn = serializers.CharField(write_only=True, required=False, allow_blank=True, validators=[datasolve.data_validate])
+
+    def update(self, instance, validated_data):
+        validated_data.pop('light_sn', None)
+        return super().update(instance, validated_data)
+
     class Meta:
         model = ListModel
         exclude = ['openid', 'is_delete', ]
@@ -80,6 +92,12 @@ class BinsetPartialUpdateSerializer(serializers.ModelSerializer):
     bin_size = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
     bin_property = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
     creater = serializers.CharField(read_only=False, required=False, validators=[datasolve.data_validate])
+    light_sn = serializers.CharField(write_only=True, required=False, allow_blank=True, validators=[datasolve.data_validate])
+
+    def update(self, instance, validated_data):
+        validated_data.pop('light_sn', None)
+        return super().update(instance, validated_data)
+
     class Meta:
         model = ListModel
         exclude = ['openid', 'is_delete', ]

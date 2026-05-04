@@ -1,6 +1,6 @@
 from django_filters import FilterSet
 
-from .models import BinLightBindingModel, LightStripDeviceModel, LightStripTaskLogModel
+from .models import BinLightBindingModel, LightStripDeviceModel, LightStripTagModel, LightStripTaskLogModel
 
 
 class DeviceFilter(FilterSet):
@@ -34,6 +34,19 @@ class BindingFilter(FilterSet):
         }
 
 
+class TagFilter(FilterSet):
+    class Meta:
+        model = LightStripTagModel
+        fields = {
+            "id": ['exact', 'gt', 'gte', 'lt', 'lte', 'in', 'range'],
+            "light_sn": ['exact', 'iexact', 'contains', 'icontains'],
+            "light_address": ['exact', 'iexact', 'contains', 'icontains'],
+            "is_active": ['exact'],
+            "create_time": ['year', 'month', 'day', 'gt', 'gte', 'lt', 'lte', 'range'],
+            "update_time": ['year', 'month', 'day', 'gt', 'gte', 'lt', 'lte', 'range']
+        }
+
+
 class TaskLogFilter(FilterSet):
     class Meta:
         model = LightStripTaskLogModel
@@ -50,4 +63,3 @@ class TaskLogFilter(FilterSet):
             "create_time": ['year', 'month', 'day', 'gt', 'gte', 'lt', 'lte', 'range'],
             "update_time": ['year', 'month', 'day', 'gt', 'gte', 'lt', 'lte', 'range']
         }
-

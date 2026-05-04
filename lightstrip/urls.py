@@ -11,6 +11,13 @@ urlpatterns = [
         'patch': 'partial_update',
         'delete': 'destroy'
     }), name="lightstrip_device_detail"),
+    path(r'tag/', views.TagAPIViewSet.as_view({"get": "list", "post": "create"}), name="lightstrip_tag"),
+    re_path(r'^tag/(?P<pk>\d+)/$', views.TagAPIViewSet.as_view({
+        'get': 'retrieve',
+        'put': 'update',
+        'patch': 'partial_update',
+        'delete': 'destroy'
+    }), name="lightstrip_tag_detail"),
     path(r'binding/', views.BindingAPIViewSet.as_view({"get": "list", "post": "create"}), name="lightstrip_binding"),
     re_path(r'^binding/(?P<pk>\d+)/$', views.BindingAPIViewSet.as_view({
         'get': 'retrieve',

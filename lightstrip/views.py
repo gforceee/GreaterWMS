@@ -9,8 +9,8 @@ from binset.models import ListModel as BinSetModel
 from dn.models import PickingListModel
 from utils.page import MyPageNumberPagination
 
-from .filter import BindingFilter, DeviceFilter, TaskLogFilter
-from .models import BinLightBindingModel, LightStripDeviceModel, LightStripTaskLogModel
+from .filter import BindingFilter, DeviceFilter, TagFilter, TaskLogFilter
+from .models import BinLightBindingModel, LightStripDeviceModel, LightStripTagModel, LightStripTaskLogModel
 from .serializers import (
     BinLightBindingGetSerializer,
     BinLightBindingPartialUpdateSerializer,
@@ -21,6 +21,10 @@ from .serializers import (
     LightStripDevicePartialUpdateSerializer,
     LightStripDevicePostSerializer,
     LightStripDeviceUpdateSerializer,
+    LightStripTagGetSerializer,
+    LightStripTagPartialUpdateSerializer,
+    LightStripTagPostSerializer,
+    LightStripTagUpdateSerializer,
     LightStripTaskLogGetSerializer,
     LightStripTriggerSerializer,
     PTLDisplaySerializer,
@@ -115,6 +119,7 @@ class BindingAPIViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         data = request.data.copy()
         data['openid'] = self.request.auth.openid
+        data = self._resolve_tag_payload(data)
         bin_name = data.get('bin_name')
         device_id = data.get('device')
         if not BinSetModel.objects.filter(openid=self.request.auth.openid, bin_name=bin_name, is_delete=False).exists():
@@ -133,13 +138,114 @@ class BindingAPIViewSet(viewsets.ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
+        data = self._resolve_tag_payload(request.data.copy())
+        self._validate_device_access(data)
+        serializer = self.get_serializer(instance, data=data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.save()
+        except IntegrityError:
+            raise APIException({"detail": "This bin is already bound to a light"})
+        return Response(serializer.data, status=200)
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        data = self._resolve_tag_payload(request.data.copy())
+        self._validate_device_access(data)
+        serializer = self.get_serializer(instance, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.save()
+        except IntegrityError:
+            raise APIException({"detail": "This bin is already bound to a light"})
+        return Response(serializer.data, status=200)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.is_delete = True
+        instance.save(update_fields=['is_delete', 'update_time'])
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data, status=200)
+
+    def _validate_device_access(self, data):
+        device_id = data.get('device')
+        if device_id is None:
+            return
+        if not LightStripDeviceModel.objects.filter(
+            openid=self.request.auth.openid,
+            id=device_id,
+            is_delete=False
+        ).exists():
+            raise APIException({"detail": "Device does not exist"})
+
+    def _resolve_tag_payload(self, data):
+        light_sn = data.get('light_sn')
+        if not light_sn:
+            return data
+        tag = LightStripTagModel.objects.filter(
+            openid=self.request.auth.openid,
+            light_sn=light_sn,
+            is_delete=False,
+            is_active=True,
+            device__is_delete=False,
+            device__is_active=True
+        ).select_related('device').first()
+        if tag is None:
+            raise APIException({"detail": "Light SN does not exist or is inactive"})
+        device_id = data.get('device')
+        if device_id and int(device_id) != tag.device_id:
+            raise APIException({"detail": "Light SN does not belong to the selected device"})
+        data['device'] = tag.device_id
+        data['light_address'] = tag.light_address
+        return data
+
+
+class TagAPIViewSet(viewsets.ModelViewSet):
+    pagination_class = MyPageNumberPagination
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    ordering_fields = ['id', 'create_time', 'update_time']
+    filter_class = TagFilter
+
+    def get_queryset(self):
+        if self.request.user:
+            return LightStripTagModel.objects.filter(
+                openid=self.request.auth.openid,
+                is_delete=False
+            ).select_related('device')
+        return LightStripTagModel.objects.none()
+
+    def get_serializer_class(self):
+        if self.action in ['list', 'retrieve', 'destroy']:
+            return LightStripTagGetSerializer
+        if self.action == 'create':
+            return LightStripTagPostSerializer
+        if self.action == 'update':
+            return LightStripTagUpdateSerializer
+        if self.action == 'partial_update':
+            return LightStripTagPartialUpdateSerializer
+        return self.http_method_not_allowed(request=self.request)
+
+    def create(self, request, *args, **kwargs):
+        data = request.data.copy()
+        data['openid'] = self.request.auth.openid
+        self._validate_device_access(data)
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.save()
+        except IntegrityError:
+            raise APIException({"detail": "Light SN or address already exists"})
+        return Response(serializer.data, status=200)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
         self._validate_device_access(request.data)
         serializer = self.get_serializer(instance, data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
             serializer.save()
         except IntegrityError:
-            raise APIException({"detail": "This bin is already bound to a light"})
+            raise APIException({"detail": "Light SN or address already exists"})
         return Response(serializer.data, status=200)
 
     def partial_update(self, request, *args, **kwargs):
@@ -150,7 +256,7 @@ class BindingAPIViewSet(viewsets.ModelViewSet):
         try:
             serializer.save()
         except IntegrityError:
-            raise APIException({"detail": "This bin is already bound to a light"})
+            raise APIException({"detail": "Light SN or address already exists"})
         return Response(serializer.data, status=200)
 
     def destroy(self, request, *args, **kwargs):

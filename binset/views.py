@@ -7,6 +7,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.response import Response
 from .filter import Filter
 from rest_framework.exceptions import APIException
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from binsize.models import ListModel as binsize
 from scanner.models import ListModel as scanner
@@ -17,6 +18,7 @@ from .files import FileRenderCN, FileRenderEN
 from rest_framework.settings import api_settings
 from utils.md5 import Md5
 from .serializers import ScannerBinsetTagGetSerializer
+from lightstrip.models import BinLightBindingModel, LightStripTagModel
 
 class ScannerBinsetTagView(viewsets.ModelViewSet):
     """
@@ -113,18 +115,26 @@ class APIViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         data = self.request.data.copy()
         data['openid'] = self.request.auth.openid
+        light_sn = self._pop_light_sn(data)
         if ListModel.objects.filter(openid=data['openid'], bin_name=data['bin_name'], is_delete=False).exists():
             raise APIException({"detail": "Data exists"})
         else:
             if binsize.objects.filter(openid=data['openid'], bin_size=data['bin_size'], is_delete=False).exists():
                 if binproperty.objects.filter(Q(openid=data['openid'], bin_property=data['bin_property'], is_delete=False) |
                                               Q(openid='init_data', bin_property=data['bin_property'], is_delete=False)).exists():
-                    data['bar_code'] = Md5.md5(data['bin_name'])
-                    serializer = self.get_serializer(data=data)
-                    serializer.is_valid(raise_exception=True)
-                    serializer.save()
-                    scanner.objects.create(openid=self.request.auth.openid, mode="BINSET", code=data['bin_name'],
-                                           bar_code=data['bar_code'])
+                    with transaction.atomic():
+                        data['bar_code'] = Md5.md5(data['bin_name'])
+                        serializer = self.get_serializer(data=data)
+                        serializer.is_valid(raise_exception=True)
+                        serializer.save()
+                        scanner.objects.create(openid=self.request.auth.openid, mode="BINSET", code=data['bin_name'],
+                                               bar_code=data['bar_code'])
+                        self._bind_lightstrip_by_sn(
+                            openid=self.request.auth.openid,
+                            bin_name=data['bin_name'],
+                            light_sn=light_sn,
+                            replace_existing=False
+                        )
                     headers = self.get_success_headers(serializer.data)
                     return Response(serializer.data, status=200, headers=headers)
                 else:
@@ -138,12 +148,20 @@ class APIViewSet(viewsets.ModelViewSet):
             raise APIException({"detail": "Cannot update data which not yours"})
         else:
             data = self.request.data.copy()
+            light_sn = self._pop_light_sn(data)
             if binsize.objects.filter(openid=self.request.auth.openid, bin_size=data['bin_size'], is_delete=False).exists():
                 if binproperty.objects.filter(Q(openid=self.request.auth.openid, bin_property=data['bin_property'], is_delete=False) |
                                               Q(openid='init_data', bin_property=data['bin_property'], is_delete=False)).exists():
-                    serializer = self.get_serializer(qs, data=data)
-                    serializer.is_valid(raise_exception=True)
-                    serializer.save()
+                    with transaction.atomic():
+                        serializer = self.get_serializer(qs, data=data)
+                        serializer.is_valid(raise_exception=True)
+                        serializer.save()
+                        self._bind_lightstrip_by_sn(
+                            openid=self.request.auth.openid,
+                            bin_name=qs.bin_name,
+                            light_sn=light_sn,
+                            replace_existing=True
+                        )
                     headers = self.get_success_headers(serializer.data)
                     return Response(serializer.data, status=200, headers=headers)
                 else:
@@ -157,12 +175,20 @@ class APIViewSet(viewsets.ModelViewSet):
             raise APIException({"detail": "Cannot partial_update data which not yours"})
         else:
             data = self.request.data.copy()
+            light_sn = self._pop_light_sn(data)
             if binsize.objects.filter(openid=self.request.auth.openid, bin_size=data['bin_size'], is_delete=False).exists():
                 if binproperty.objects.filter(Q(openid=self.request.auth.openid, bin_property=data['bin_property'], is_delete=False) |
                                               Q(openid='init_data', bin_property=data['bin_property'], is_delete=False)).exists():
-                    serializer = self.get_serializer(qs, data=data, partial=True)
-                    serializer.is_valid(raise_exception=True)
-                    serializer.save()
+                    with transaction.atomic():
+                        serializer = self.get_serializer(qs, data=data, partial=True)
+                        serializer.is_valid(raise_exception=True)
+                        serializer.save()
+                        self._bind_lightstrip_by_sn(
+                            openid=self.request.auth.openid,
+                            bin_name=qs.bin_name,
+                            light_sn=light_sn,
+                            replace_existing=True
+                        )
                     headers = self.get_success_headers(serializer.data)
                     return Response(serializer.data, status=200, headers=headers)
                 else:
@@ -180,6 +206,51 @@ class APIViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(qs, many=False)
             headers = self.get_success_headers(serializer.data)
             return Response(serializer.data, status=200, headers=headers)
+
+    def _pop_light_sn(self, data):
+        light_sn = data.pop('light_sn', '')
+        if isinstance(light_sn, list):
+            light_sn = light_sn[0] if light_sn else ''
+        return str(light_sn or '').strip()
+
+    def _bind_lightstrip_by_sn(self, openid, bin_name, light_sn, replace_existing):
+        if not light_sn:
+            return
+        tag = LightStripTagModel.objects.filter(
+            openid=openid,
+            light_sn=light_sn,
+            is_delete=False,
+            is_active=True,
+            device__is_delete=False,
+            device__is_active=True
+        ).select_related('device').first()
+        if tag is None:
+            raise APIException({"detail": "Light SN does not exist or is inactive"})
+        binding = BinLightBindingModel.objects.filter(
+            openid=openid,
+            bin_name=bin_name,
+            is_delete=False
+        ).first()
+        try:
+            if binding:
+                if not replace_existing:
+                    raise APIException({"detail": "This bin is already bound to a light"})
+                binding.device = tag.device
+                binding.light_sn = tag.light_sn
+                binding.light_address = tag.light_address
+                binding.is_active = True
+                binding.save(update_fields=['device', 'light_sn', 'light_address', 'is_active', 'update_time'])
+            else:
+                BinLightBindingModel.objects.create(
+                    openid=openid,
+                    bin_name=bin_name,
+                    device=tag.device,
+                    light_sn=tag.light_sn,
+                    light_address=tag.light_address,
+                    color=tag.extra_config.get('color', 'green') if isinstance(tag.extra_config, dict) else 'green'
+                )
+        except IntegrityError:
+            raise APIException({"detail": "This light SN or address is already bound to another bin"})
 
 class FileDownloadView(viewsets.ModelViewSet):
     renderer_classes = (FileRenderCN, ) + tuple(api_settings.DEFAULT_RENDERER_CLASSES)
